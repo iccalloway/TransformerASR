@@ -1,23 +1,18 @@
 ##Libraries
-
-import os
-os.chdir('C:/Users/Ian Calloway/Academics/Projects/ASR/')
-
-import tensorflow as tf
-import time
 from numpy.random import random
-from numpy import reshape, array, transpose, zeros, arange
+from numpy import reshape, array, transpose, zeros, arange, unique
 from itertools import groupby
+from sklearn.utils import class_weight
+from HelperFunctions import unpickle, empickle, prepare_array
 
-
-#import HelperFunctions
-#from HelperFunctions import unpickle, empickle, prepare_array
+# Keras-related functions
+from keras import metrics
 from keras.layers import Conv2D, Input, Flatten,Dense,Reshape
 from keras.models import Model
 from keras.utils import normalize
-from keras_transformer import get_model, get_model_ne
+from transformer_custom import get_model_ne, decode_ne # Edited to allow arbitrary model as encoder input
 
-#Variables
+# Variables
 features = 40
 frames = 50
 batches = 20
@@ -30,13 +25,13 @@ def to_one_hot(a, embed_dim):
     b[arange(a.size),a]=1
     return b
     
-##File Locations
+# File Locations
 segdict_location = "E:/Projects/English RNN Phonetic Classifier/segment_dict.pkl"
 input_location = "./input3d.pickle"
 output_location = "E:/Projects/English RNN Phonetic Classifier/TrainingOutput.pickle"
 pad_list = ['<PAD>','<START>','<END>']
 
-##Segment class setup
+# Segment class setup
 seg_dict = unpickle(segdict_location)
 rev_seg = {item[1]:item[0] for item in seg_dict.items()}
 
@@ -87,16 +82,6 @@ embed_dim = 20
 hidden_dim = 1000
 adjusted_hd = frames*ceil(1000/frames)
 
-'''
-# Convolutional Block (Output 2D embedding tensor)
-acous_input = Input(shape=(frames,features,1))
-net = Conv2D(2,kernel_size=(5,5), strides=(2,2))(acous_input)
-net = Conv2D(4,kernel_size=(5,5), strides=(2,2))(net)
-net= Flatten()(net)
-net = Dense(adjusted_hd)(net)
-encode_input = Reshape((int(adjusted_hd/embed_dim),embed_dim))(net)
-'''
-
 #Shortened VGG Block
 acous_input = Input(shape=(frames,features,1))
 net = Conv2D(64,kernel_size=(3,3))(acous_input)
@@ -115,7 +100,7 @@ encode_input = Reshape((int(adjusted_hd/embed_dim),embed_dim))(net)
 
 # Transformer Block (Output 1D segment prediction tensor)
 model = get_model_ne(
-    token_num=[280, unique_segments],
+    token_num=unique_segments,
     embed_dim=embed_dim,
     encode_input=encode_input,
     encode_start=acous_input,
@@ -128,20 +113,23 @@ model = get_model_ne(
     dropout_rate=0.05,
     use_same_embed=False,
     embed_trainable=[True, True],
-    embed_weights=[random((280,20)),random((77,20))]
+    embed_weights=random((unique_segments,embed_dim))
 )
-model.compile(optimizer='adam', loss='sparse_categorical_crossentropy', metrics=['accuracy'])
+
+model.compile(optimizer='adam', loss='sparse_categorical_crossentropy', metrics=['accuracy', 'crossentropy'])
+class_weights = hstack((array([0,0,0]),class_weight.compute_class_weight('balanced',classes=unique(o_array),y=o_array)))
 
 model.fit(
     x=[acoustics,decode_input],
     y=decode_output,
     epochs=5,
-    validation_split=0.2
+    validation_split=0.1,
+    class_weight=class_weights
 )
 
-decode(
+decode_ne(
     model,
-    acoustics[100,:,1:2],
+    acoustics[100,None],
     full_dict['<START>'],
     full_dict['<END>'],
     full_dict['<PAD>'],
