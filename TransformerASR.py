@@ -2,7 +2,7 @@
 # Improve class balance
 # Libraries
 from numpy.random import random
-from numpy import reshape, array, transpose, zeros, arange, unique
+from numpy import reshape, array, transpose, zeros, arange, unique, where, delete
 from itertools import groupby
 from sklearn.utils import class_weight
 from HelperFunctions import unpickle, empickle, prepare_array
@@ -12,11 +12,11 @@ import tensorflow as tf
 
 # Keras-related functions
 from keras import metrics
-from keras.layers import Conv2D, Input, Flatten, Dense, Reshape
+from keras.layers import Conv2D, Input, Flatten, Dense, Reshape, MaxPool2D
 from keras.models import Model
 from keras.utils import normalize
 
-# Custom Alterations to keras_transformer
+# Custom alterations to keras_transformer
 from transformer_custom import get_model_ne, decode_ne
 
 # Variables
@@ -59,7 +59,7 @@ def renumber(d,uniques):
 
 # File Locations
 segdict_location = "E:/Projects/English RNN Phonetic Classifier/segment_dict.pkl"
-input_location = "./input3d.pickle"
+input_location = "C:/Users/Ian Calloway/Academics/Projects/ASR/input3d.pickle"
 output_location = "E:/Projects/English RNN Phonetic Classifier/TrainingOutput.pickle"
 pad_list = ['<PAD>', '<START>', '<END>']
 
@@ -96,7 +96,7 @@ collapsed = [[x[0] for x in groupby(out2d_flat[b, :])] for b in range(out2d_flat
 # Determine which frames to exclude
 exclude_vals = [full_dict[a] for a in exclude]
 exclude_indices =where(array([a if any(b in collapsed[a] for b in exclude_vals) else None for a in range(len(collapsed))])!=None)
-excluded = remove_by_indices(transform_vals, exclude_indices[0].tolist())
+excluded = remove_by_indices(collapsed, exclude_indices[0].tolist())
 
 # Determine which segment representations to simplify
 convert_dict = dict([(full_dict[a[0]],[full_dict[b] for b in a[1]]) for a in transforms.items()])
@@ -112,7 +112,7 @@ rev_final = {item[1]: item[0] for item in final_dict.items()}
 
 unique_segments = len(final_dict)
 
-collapsed = [[final_dict[rev_full[b]] for b in a] for a in transform_vals]
+collapsed_new = [[final_dict[rev_full[b]] for b in a] for a in transform_vals]
 
 
 
@@ -123,7 +123,7 @@ decode_input = array(
         a +
         [full_dict['<END>']] +
         [full_dict['<PAD>']] * (max_length - len(a) - 2)
-        for a in collapsed
+        for a in collapsed_new
     ]
 )
 
@@ -131,7 +131,9 @@ decode_output = array([
     a +
     [full_dict['<END>']] +
     [full_dict['<PAD>']] * (max_length - len(a) - 1)
-    for a in collapsed])
+    for a in collapsed_new
+    ]
+)
 
 decode_output = reshape(decode_output, (decode_output.shape[0], max_length, 1))
 
@@ -172,29 +174,24 @@ model = get_model_ne(
     attention_activation='relu',
     feed_forward_activation='relu',
     dropout_rate=0.05,
-    use_same_embed=False,
     embed_trainable=True,
     embed_weights=random((unique_segments, embed_dim))
 )
 
-#model.compile(optimizer='adam', loss='sparse_categorical_crossentropy', metrics=['accuracy', 'crossentropy'])
-
 reflatten = [item for sublist in collapsed for item in sublist]
-class_weights = hstack((array([1, 1, 1]), class_weight.compute_class_weight('balanced', classes=unique(reflatten), y=reflatten))).tolist()
+class_weights = [1, 1, 1]+class_weight.compute_class_weight('balanced', classes=unique(reflatten), y=reflatten).tolist()
 
-def weightedloss(weights,depth):
-
+# Custom function to compute sparse categorical cross-entropy with class imbalance
+def weighted_loss(weights):
     def loss(y_true,y_pred):
-        y_true_hot = tf.one_hot(tf.cast(y_true, 'int32'), int(depth))
-        class_weights = tf.constant([weights])
-        loss_weights = tf.reduce_sum(class_weights*y_true_hot, axis=1)
+        class_weights = tf.constant(weights)
+        loss_weights = tf.gather(class_weights, tf.cast(y_true, 'int32'))
         unweighted_losses = tf.keras.losses.sparse_categorical_crossentropy(y_true,y_pred)
-        weighted_losses = unweighted_losses*loss_weights
+        weighted_losses = unweighted_losses*loss_weights[:,:,0]
         return weighted_losses
-        #return tf.reduce_mean(weighted_losses)
     return loss
 
-model.compile(optimizer='adam', loss=weightedloss(class_weights, unique_segments), metrics=['accuracy', 'crossentropy'])
+model.compile(optimizer='adam', loss=weighted_loss(class_weights), metrics=['sparse_categorical_accuracy'])
 
 
 
@@ -203,7 +200,7 @@ model.fit(
     x=[acous_trim, decode_input],
     y=decode_output,
     epochs=5,
-    batch_size=20,
+    batch_size=50,
     validation_split=0.1,
 )
 
@@ -217,6 +214,3 @@ decoded = decode_ne(
 )
 
 answer = [[rev_final[a] for a in b] for b in decoded]
-
-
-
